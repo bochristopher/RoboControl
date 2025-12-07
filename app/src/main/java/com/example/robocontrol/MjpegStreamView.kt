@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.DataInputStream
@@ -116,7 +117,7 @@ private suspend fun readMjpegStream(
     val SOI = byteArrayOf(0xFF.toByte(), 0xD8.toByte()) // JPEG start
     val EOI = byteArrayOf(0xFF.toByte(), 0xD9.toByte()) // JPEG end
     
-    while (kotlinx.coroutines.isActive) {
+    while (currentCoroutineContext().isActive) {
         try {
             // Find JPEG start marker (FFD8)
             if (!findMarker(inputStream, SOI)) {
