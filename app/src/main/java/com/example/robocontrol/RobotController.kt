@@ -1,5 +1,7 @@
 package com.example.robocontrol
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -12,9 +14,9 @@ import kotlin.math.abs
  * Handles robot control input from Rokid glasses touchpad/remote.
  * 
  * Controls:
- * - Single finger swipe left/right -> DPAD_LEFT/RIGHT -> Turn left/right
- * - Two finger swipe right -> Forward
- * - Two finger swipe left -> Backward
+ * - Single finger swipe left/right -> Turn left/right
+ * - Press and hold -> Forward (continuous while held)
+ * - Double tap -> Backward (continuous until released)
  * - Release -> Stop
  */
 class RobotController(
@@ -23,7 +25,10 @@ class RobotController(
 ) {
     companion object {
         private const val TAG = "RobotController"
-        private const val SWIPE_THRESHOLD = 50f // Minimum swipe distance
+        private const val SWIPE_THRESHOLD = 30f // Minimum swipe distance
+        private const val HOLD_THRESHOLD = 400L // ms to trigger hold
+        private const val DOUBLE_TAP_TIMEOUT = 300L // ms between taps for double tap
+        private const val TAP_MOVEMENT_THRESHOLD = 20f // Max movement for a tap
     }
 
     private val _currentAction = MutableStateFlow(ControlAction.NONE)
@@ -32,11 +37,18 @@ class RobotController(
     private var commandJob: Job? = null
     private var keyHeldDown = false
 
-    // Touch tracking for two-finger gestures
+    // Touch tracking
     private var initialTouchX = 0f
     private var initialTouchY = 0f
-    private var pointerCount = 0
-    private var twoFingerSwipeDetected = false
+    private var touchDownTime = 0L
+    private var lastTapTime = 0L
+    private var isHolding = false
+    private var swipeDetected = false
+    private var tapCount = 0
+
+    // Handler for hold detection
+    private val handler = Handler(Looper.getMainLooper())
+    private var holdRunnable: Runnable? = null
 
     enum class ControlAction {
         NONE, FORWARD, BACKWARD, LEFT, RIGHT
@@ -50,7 +62,6 @@ class RobotController(
         val action = when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_A -> ControlAction.LEFT
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_D -> ControlAction.RIGHT
-            // Keep DPAD_UP/DOWN for external keyboard testing
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_W -> ControlAction.FORWARD
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_S -> ControlAction.BACKWARD
             else -> null
@@ -82,55 +93,59 @@ class RobotController(
     }
 
     /**
-     * Handle touch events for two-finger swipe detection
+     * Handle touch events for gesture detection
      */
     fun onTouchEvent(event: MotionEvent): Boolean {
-        val action = event.actionMasked
-        val currentPointerCount = event.pointerCount
-
-        when (action) {
+        when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                // First finger down
                 initialTouchX = event.x
                 initialTouchY = event.y
-                pointerCount = 1
-                twoFingerSwipeDetected = false
-                Log.d(TAG, "Touch DOWN: x=$initialTouchX, pointers=$currentPointerCount")
-            }
+                touchDownTime = System.currentTimeMillis()
+                isHolding = false
+                swipeDetected = false
+                
+                Log.d(TAG, "Touch DOWN at ($initialTouchX, $initialTouchY)")
 
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                // Additional finger(s) down
-                pointerCount = currentPointerCount
-                if (currentPointerCount >= 2) {
-                    // Reset initial position for two-finger gesture
-                    initialTouchX = (event.getX(0) + event.getX(1)) / 2f
-                    initialTouchY = (event.getY(0) + event.getY(1)) / 2f
-                    twoFingerSwipeDetected = false
-                    Log.d(TAG, "Two fingers DOWN: x=$initialTouchX, pointers=$currentPointerCount")
+                // Check for double tap
+                val timeSinceLastTap = touchDownTime - lastTapTime
+                if (timeSinceLastTap < DOUBLE_TAP_TIMEOUT) {
+                    tapCount++
+                    Log.d(TAG, "Tap count: $tapCount, time since last: $timeSinceLastTap")
+                    if (tapCount >= 2) {
+                        // Double tap detected -> Backward
+                        Log.d(TAG, "DOUBLE TAP -> BACKWARD")
+                        tapCount = 0
+                        cancelHoldDetection()
+                        startAction(ControlAction.BACKWARD)
+                        return true
+                    }
+                } else {
+                    tapCount = 1
                 }
+
+                // Schedule hold detection
+                scheduleHoldDetection()
             }
 
             MotionEvent.ACTION_MOVE -> {
-                if (currentPointerCount >= 2 && !twoFingerSwipeDetected) {
-                    // Calculate two-finger swipe
-                    val currentX = (event.getX(0) + event.getX(1)) / 2f
-                    val currentY = (event.getY(0) + event.getY(1)) / 2f
-                    val deltaX = currentX - initialTouchX
-                    val deltaY = currentY - initialTouchY
+                val deltaX = event.x - initialTouchX
+                val deltaY = event.y - initialTouchY
+                val distance = abs(deltaX) + abs(deltaY)
 
-                    Log.d(TAG, "Two finger MOVE: deltaX=$deltaX, deltaY=$deltaY")
-
-                    // Check for horizontal two-finger swipe
+                // If moved too much, cancel hold detection and check for swipe
+                if (distance > TAP_MOVEMENT_THRESHOLD && !swipeDetected && !isHolding) {
+                    cancelHoldDetection()
+                    tapCount = 0
+                    
+                    // Check for horizontal swipe
                     if (abs(deltaX) > SWIPE_THRESHOLD && abs(deltaX) > abs(deltaY)) {
-                        twoFingerSwipeDetected = true
+                        swipeDetected = true
                         if (deltaX > 0) {
-                            // Two finger swipe RIGHT -> FORWARD
-                            Log.d(TAG, "Two finger swipe RIGHT -> FORWARD")
-                            startAction(ControlAction.FORWARD)
+                            Log.d(TAG, "SWIPE RIGHT -> RIGHT")
+                            startAction(ControlAction.RIGHT)
                         } else {
-                            // Two finger swipe LEFT -> BACKWARD
-                            Log.d(TAG, "Two finger swipe LEFT -> BACKWARD")
-                            startAction(ControlAction.BACKWARD)
+                            Log.d(TAG, "SWIPE LEFT -> LEFT")
+                            startAction(ControlAction.LEFT)
                         }
                         return true
                     }
@@ -138,24 +153,50 @@ class RobotController(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                // All fingers up
-                Log.d(TAG, "Touch UP - stopping")
-                if (twoFingerSwipeDetected || _currentAction.value == ControlAction.FORWARD || 
-                    _currentAction.value == ControlAction.BACKWARD) {
+                val touchDuration = System.currentTimeMillis() - touchDownTime
+                val deltaX = event.x - initialTouchX
+                val deltaY = event.y - initialTouchY
+                val distance = abs(deltaX) + abs(deltaY)
+                
+                Log.d(TAG, "Touch UP: duration=$touchDuration, distance=$distance, isHolding=$isHolding")
+
+                cancelHoldDetection()
+
+                // Record tap time for double-tap detection
+                if (distance < TAP_MOVEMENT_THRESHOLD && touchDuration < HOLD_THRESHOLD) {
+                    lastTapTime = System.currentTimeMillis()
+                    Log.d(TAG, "Registered as tap, tapCount=$tapCount")
+                }
+
+                // Stop any action on release
+                if (isHolding || swipeDetected || _currentAction.value != ControlAction.NONE) {
                     stopAction()
                 }
-                pointerCount = 0
-                twoFingerSwipeDetected = false
-            }
-
-            MotionEvent.ACTION_POINTER_UP -> {
-                // One finger lifted but others still down
-                pointerCount = currentPointerCount - 1
-                Log.d(TAG, "Pointer UP: remaining pointers=$pointerCount")
+                
+                isHolding = false
+                swipeDetected = false
             }
         }
 
-        return twoFingerSwipeDetected
+        return false
+    }
+
+    private fun scheduleHoldDetection() {
+        cancelHoldDetection()
+        holdRunnable = Runnable {
+            if (!swipeDetected) {
+                Log.d(TAG, "HOLD DETECTED -> FORWARD")
+                isHolding = true
+                tapCount = 0
+                startAction(ControlAction.FORWARD)
+            }
+        }
+        handler.postDelayed(holdRunnable!!, HOLD_THRESHOLD)
+    }
+
+    private fun cancelHoldDetection() {
+        holdRunnable?.let { handler.removeCallbacks(it) }
+        holdRunnable = null
     }
 
     /**
