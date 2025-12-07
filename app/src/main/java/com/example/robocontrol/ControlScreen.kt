@@ -6,14 +6,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -25,48 +24,31 @@ import kotlinx.coroutines.isActive
 fun ControlScreen(
     settings: RobotSettings,
     connectionState: ConnectionState,
-    onGestureAction: (GestureAction) -> Unit,
+    currentAction: RobotController.ControlAction,
+    robotController: RobotController,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var currentAction by remember { mutableStateOf(GestureAction.NONE) }
     var commandsSent by remember { mutableIntStateOf(0) }
 
-    // Command sending loop
+    // Count commands when action changes
     LaunchedEffect(currentAction) {
-        if (currentAction != GestureAction.NONE) {
-            while (isActive && currentAction != GestureAction.NONE) {
-                onGestureAction(currentAction)
+        if (currentAction != RobotController.ControlAction.NONE) {
+            while (isActive && currentAction != RobotController.ControlAction.NONE) {
                 commandsSent++
-                delay(100) // Send command every 100ms
+                delay(100)
             }
         }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Video stream background (behind everything)
+        // Video stream background
         MjpegStreamView(
             streamUrl = settings.videoStreamUrl,
             modifier = Modifier.fillMaxSize()
         )
 
-        // Gesture area (covers most of screen but not top bar)
-        GestureController(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 56.dp), // Leave space for top bar
-            onActionChanged = { action ->
-                currentAction = action
-                if (action == GestureAction.NONE) {
-                    // Immediately send stop
-                    onGestureAction(GestureAction.NONE)
-                }
-            }
-        ) {
-            // Empty - gestures only, video is behind
-        }
-
-        // Top bar with status (OUTSIDE gesture controller - clickable!)
+        // Top bar with status (clickable for settings)
         TopStatusBar(
             connectionState = connectionState,
             settings = settings,
@@ -91,11 +73,19 @@ fun ControlScreen(
                 .padding(16.dp)
         )
 
-        // Gesture hints (bottom right)
-        GestureHints(
+        // Control hints (bottom right)
+        ControlHints(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
+        )
+
+        // Touch controls for screen tap (fallback)
+        TouchControls(
+            robotController = robotController,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 80.dp)
         )
     }
 }
@@ -193,11 +183,11 @@ fun ConnectionIndicator(state: ConnectionState) {
 
 @Composable
 fun ActionDisplay(
-    action: GestureAction,
+    action: RobotController.ControlAction,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
-        visible = action != GestureAction.NONE,
+        visible = action != RobotController.ControlAction.NONE,
         modifier = modifier,
         enter = fadeIn() + scaleIn(),
         exit = fadeOut() + scaleOut()
@@ -207,11 +197,11 @@ fun ActionDisplay(
                 .clip(RoundedCornerShape(16.dp))
                 .background(
                     when (action) {
-                        GestureAction.FORWARD -> Color(0xFF00AA44)
-                        GestureAction.BACKWARD -> Color(0xFFAA4400)
-                        GestureAction.LEFT -> Color(0xFF0066AA)
-                        GestureAction.RIGHT -> Color(0xFF6600AA)
-                        GestureAction.NONE -> Color.Transparent
+                        RobotController.ControlAction.FORWARD -> Color(0xFF00AA44)
+                        RobotController.ControlAction.BACKWARD -> Color(0xFFAA4400)
+                        RobotController.ControlAction.LEFT -> Color(0xFF0066AA)
+                        RobotController.ControlAction.RIGHT -> Color(0xFF6600AA)
+                        RobotController.ControlAction.NONE -> Color.Transparent
                     }.copy(alpha = 0.85f)
                 )
                 .padding(horizontal = 32.dp, vertical = 16.dp)
@@ -249,7 +239,7 @@ fun DebugInfo(
 }
 
 @Composable
-fun GestureHints(modifier: Modifier = Modifier) {
+fun ControlHints(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
@@ -257,10 +247,111 @@ fun GestureHints(modifier: Modifier = Modifier) {
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Text("↑ Swipe = Forward", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp)
-        Text("↓ Swipe = Backward", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp)
-        Text("1 Tap = Right", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp)
-        Text("2 Tap = Left", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp)
+        Text("Touchpad Controls:", color = Color(0xFF00D9FF), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Text("↑ Swipe Up = Forward", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
+        Text("↓ Swipe Down = Back", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
+        Text("← Swipe Left = Left", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
+        Text("→ Swipe Right = Right", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
     }
 }
 
+/**
+ * On-screen touch buttons as fallback controls
+ */
+@Composable
+fun TouchControls(
+    robotController: RobotController,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Left button
+        DirectionButton(
+            text = "◄",
+            color = Color(0xFF0066AA),
+            onPress = { robotController.startAction(RobotController.ControlAction.LEFT) },
+            onRelease = { robotController.stopAction() }
+        )
+
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Forward button
+            DirectionButton(
+                text = "▲",
+                color = Color(0xFF00AA44),
+                onPress = { robotController.startAction(RobotController.ControlAction.FORWARD) },
+                onRelease = { robotController.stopAction() }
+            )
+
+            // Backward button
+            DirectionButton(
+                text = "▼",
+                color = Color(0xFFAA4400),
+                onPress = { robotController.startAction(RobotController.ControlAction.BACKWARD) },
+                onRelease = { robotController.stopAction() }
+            )
+        }
+
+        // Right button
+        DirectionButton(
+            text = "►",
+            color = Color(0xFF6600AA),
+            onPress = { robotController.startAction(RobotController.ControlAction.RIGHT) },
+            onRelease = { robotController.stopAction() }
+        )
+    }
+}
+
+@Composable
+fun DirectionButton(
+    text: String,
+    color: Color,
+    onPress: () -> Unit,
+    onRelease: () -> Unit
+) {
+    var isPressed by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .size(60.dp)
+            .clip(CircleShape)
+            .background(
+                if (isPressed) color else color.copy(alpha = 0.5f)
+            )
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null
+            ) {
+                // Toggle behavior for simple taps
+            }
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        when {
+                            event.changes.any { it.pressed } && !isPressed -> {
+                                isPressed = true
+                                onPress()
+                            }
+                            event.changes.none { it.pressed } && isPressed -> {
+                                isPressed = false
+                                onRelease()
+                            }
+                        }
+                        event.changes.forEach { it.consume() }
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}

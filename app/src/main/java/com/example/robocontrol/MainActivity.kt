@@ -2,6 +2,7 @@ package com.example.robocontrol
 
 import android.content.pm.ActivityInfo
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,6 +24,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private lateinit var settingsManager: SettingsManager
     private lateinit var webSocketClient: RobotWebSocketClient
+    private lateinit var robotController: RobotController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,6 +35,11 @@ class MainActivity : ComponentActivity() {
         // Initialize managers
         settingsManager = SettingsManager(this)
         webSocketClient = RobotWebSocketClient(lifecycleScope)
+        
+        // Initialize robot controller with WebSocket command sender
+        robotController = RobotController(lifecycleScope) { direction ->
+            webSocketClient.sendMove(direction)
+        }
 
         // Full immersive mode
         enableEdgeToEdge()
@@ -49,10 +56,28 @@ class MainActivity : ComponentActivity() {
             RoboControlTheme {
                 RoboControlApp(
                     settingsManager = settingsManager,
-                    webSocketClient = webSocketClient
+                    webSocketClient = webSocketClient,
+                    robotController = robotController
                 )
             }
         }
+    }
+
+    /**
+     * Handle key events from Rokid touchpad/remote
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (robotController.onKeyDown(keyCode, event)) {
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (robotController.onKeyUp(keyCode, event)) {
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     private fun hideSystemUI() {
@@ -73,10 +98,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun RoboControlApp(
     settingsManager: SettingsManager,
-    webSocketClient: RobotWebSocketClient
+    webSocketClient: RobotWebSocketClient,
+    robotController: RobotController
 ) {
     val settings by settingsManager.settings.collectAsState(initial = RobotSettings())
     val connectionState by webSocketClient.connectionState.collectAsState()
+    val currentAction by robotController.currentAction.collectAsState()
     var showSettings by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -88,9 +115,8 @@ fun RoboControlApp(
         ControlScreen(
             settings = settings,
             connectionState = connectionState,
-            onGestureAction = { action ->
-                webSocketClient.sendMove(action.toDirection())
-            },
+            currentAction = currentAction,
+            robotController = robotController,
             onOpenSettings = { showSettings = true }
         )
 
