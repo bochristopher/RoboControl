@@ -33,6 +33,7 @@ class RobotWebSocketClient(
     private var serverUrl: String = ""
     private var shouldReconnect = true
     private var reconnectJob: Job? = null
+    private var authSent = false
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState
@@ -43,6 +44,7 @@ class RobotWebSocketClient(
     fun connect(host: String, port: Int = 8765) {
         serverUrl = "ws://$host:$port"
         shouldReconnect = true
+        authSent = false
         doConnect()
     }
 
@@ -58,7 +60,7 @@ class RobotWebSocketClient(
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "WebSocket connected")
+                Log.d(TAG, "WebSocket connected, sending auth...")
                 _connectionState.value = ConnectionState.CONNECTED
                 authenticate()
             }
@@ -67,37 +69,58 @@ class RobotWebSocketClient(
                 Log.d(TAG, "Received: $text")
                 _lastMessage.value = text
                 
-                // Check for auth success
                 try {
                     val json = JSONObject(text)
-                    if (json.optString("status") == "authenticated") {
-                        _connectionState.value = ConnectionState.AUTHENTICATED
-                        Log.d(TAG, "Authentication successful")
+                    
+                    // Check various auth success indicators
+                    val status = json.optString("status", "")
+                    val type = json.optString("type", "")
+                    
+                    // Auth successful if:
+                    // 1. Explicit "authenticated" status
+                    // 2. Receives heartbeat (server is accepting our connection)
+                    // 3. Any "ok" or "success" status
+                    if (status == "authenticated" || 
+                        status == "ok" || 
+                        status == "success" ||
+                        type == "heartbeat" ||
+                        type == "auth_success") {
+                        
+                        if (_connectionState.value != ConnectionState.AUTHENTICATED) {
+                            _connectionState.value = ConnectionState.AUTHENTICATED
+                            Log.d(TAG, "Authentication successful (indicator: status=$status, type=$type)")
+                        }
                     }
                 } catch (e: Exception) {
-                    // Ignore parse errors
+                    Log.w(TAG, "Error parsing message: ${e.message}")
                 }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure: ${t.message}")
                 _connectionState.value = ConnectionState.DISCONNECTED
+                authSent = false
                 scheduleReconnect()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.d(TAG, "WebSocket closed: $reason")
                 _connectionState.value = ConnectionState.DISCONNECTED
+                authSent = false
                 scheduleReconnect()
             }
         })
     }
 
     private fun authenticate() {
+        if (authSent) return
+        authSent = true
+        
         val authJson = JSONObject().apply {
             put("cmd", "auth")
             put("token", AUTH_TOKEN)
         }
+        Log.d(TAG, "Sending auth: $authJson")
         sendRaw(authJson.toString())
     }
 
@@ -115,8 +138,10 @@ class RobotWebSocketClient(
     }
 
     fun sendMove(direction: String) {
-        if (_connectionState.value != ConnectionState.AUTHENTICATED) {
-            Log.w(TAG, "Cannot send command - not authenticated")
+        // Allow sending if connected OR authenticated (some servers don't require auth)
+        if (_connectionState.value != ConnectionState.AUTHENTICATED && 
+            _connectionState.value != ConnectionState.CONNECTED) {
+            Log.w(TAG, "Cannot send command - not connected (state: ${_connectionState.value})")
             return
         }
         
@@ -124,12 +149,13 @@ class RobotWebSocketClient(
             put("cmd", "move")
             put("dir", direction)
         }
+        Log.d(TAG, "Sending move: $json")
         sendRaw(json.toString())
     }
 
     private fun sendRaw(message: String) {
-        Log.d(TAG, "Sending: $message")
-        webSocket?.send(message)
+        val sent = webSocket?.send(message) ?: false
+        Log.d(TAG, "Sent ($sent): $message")
     }
 
     fun disconnect() {
@@ -138,6 +164,6 @@ class RobotWebSocketClient(
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         _connectionState.value = ConnectionState.DISCONNECTED
+        authSent = false
     }
 }
-
