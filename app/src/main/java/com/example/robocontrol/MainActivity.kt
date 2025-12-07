@@ -101,19 +101,17 @@ class MainActivity : ComponentActivity() {
     /**
      * Dispatch key events to ensure they reach our handler
      */
-    override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
-        event?.let {
-            Log.d(TAG, "dispatchKeyEvent: action=${it.action}, keyCode=${it.keyCode}")
-            when (it.action) {
-                KeyEvent.ACTION_DOWN -> {
-                    if (robotController.onKeyDown(it.keyCode, it)) {
-                        return true
-                    }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        Log.d(TAG, "dispatchKeyEvent: action=${event.action}, keyCode=${event.keyCode}")
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                if (robotController.onKeyDown(event.keyCode, event)) {
+                    return true
                 }
-                KeyEvent.ACTION_UP -> {
-                    if (robotController.onKeyUp(it.keyCode, it)) {
-                        return true
-                    }
+            }
+            KeyEvent.ACTION_UP -> {
+                if (robotController.onKeyUp(event.keyCode, event)) {
+                    return true
                 }
             }
         }
