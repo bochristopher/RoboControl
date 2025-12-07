@@ -4,6 +4,7 @@ import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -116,6 +117,19 @@ class MainActivity : ComponentActivity() {
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * Dispatch touch events for two-finger swipe detection
+     * Two finger swipe right = Forward
+     * Two finger swipe left = Backward
+     */
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        // Let the robot controller handle two-finger gestures
+        if (robotController.onTouchEvent(event)) {
+            return true
+        }
+        return super.dispatchTouchEvent(event)
     }
 
     private fun hideSystemUI() {

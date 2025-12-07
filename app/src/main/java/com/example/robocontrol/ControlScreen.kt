@@ -248,10 +248,10 @@ fun ControlHints(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text("Touchpad Controls:", color = Color(0xFF00D9FF), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        Text("↑ Swipe Up = Forward", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
-        Text("↓ Swipe Down = Back", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
-        Text("← Swipe Left = Left", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
-        Text("→ Swipe Right = Right", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
+        Text("1 finger ← = Left", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
+        Text("1 finger → = Right", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
+        Text("2 fingers → = Forward", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
+        Text("2 fingers ← = Back", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
     }
 }
 
