@@ -18,7 +18,7 @@ data class RobotSettings(
     val videoPort: Int = 8080
 ) {
     val websocketUrl: String get() = "ws://$serverHost:$websocketPort"
-    val videoStreamUrl: String get() = "http://$serverHost:$videoPort/"
+    val videoStreamUrl: String get() = "http://$serverHost:$videoPort/video"
 }
 
 class SettingsManager(private val context: Context) {

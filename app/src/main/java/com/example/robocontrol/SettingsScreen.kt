@@ -113,7 +113,7 @@ fun SettingsScreen(
                     color = Color.Gray
                 )
                 Text(
-                    text = "Video: http://$serverHost:$videoPort/",
+                    text = "Video: http://$serverHost:$videoPort/video",
                     fontSize = 12.sp,
                     color = Color.Gray
                 )
