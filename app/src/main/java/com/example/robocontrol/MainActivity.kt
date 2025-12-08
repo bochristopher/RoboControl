@@ -1,15 +1,18 @@
 package com.example.robocontrol
 
+import android.Manifest
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.View
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
@@ -24,7 +27,9 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -37,9 +42,23 @@ class MainActivity : ComponentActivity() {
     private lateinit var settingsManager: SettingsManager
     private lateinit var webSocketClient: RobotWebSocketClient
     private lateinit var robotController: RobotController
+    private var voiceCommandHandler: VoiceCommandHandler? = null
 
     companion object {
         private const val TAG = "MainActivity"
+    }
+
+    // Permission request launcher
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            Log.d(TAG, "RECORD_AUDIO permission granted")
+            initializeVoiceHandler()
+        } else {
+            Log.w(TAG, "RECORD_AUDIO permission denied")
+            Toast.makeText(this, "Microphone permission needed for voice control", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,6 +76,9 @@ class MainActivity : ComponentActivity() {
             webSocketClient.sendMove(direction)
         }
 
+        // Request microphone permission for voice control
+        checkAndRequestMicrophonePermission()
+
         // Full immersive mode
         enableEdgeToEdge()
         hideSystemUI()
@@ -73,7 +95,51 @@ class MainActivity : ComponentActivity() {
                 RoboControlApp(
                     settingsManager = settingsManager,
                     webSocketClient = webSocketClient,
-                    robotController = robotController
+                    robotController = robotController,
+                    voiceHandler = voiceCommandHandler
+                )
+            }
+        }
+    }
+
+    private fun checkAndRequestMicrophonePermission() {
+        when {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED -> {
+                // Permission already granted
+                Log.d(TAG, "RECORD_AUDIO permission already granted")
+                initializeVoiceHandler()
+            }
+            shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) -> {
+                // Show explanation then request
+                Toast.makeText(this, "Microphone needed for voice commands", Toast.LENGTH_SHORT).show()
+                requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+            else -> {
+                // Request permission
+                requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
+    }
+
+    private fun initializeVoiceHandler() {
+        voiceCommandHandler = VoiceCommandHandler(this) { command ->
+            // Voice command received - send to robot
+            Log.d(TAG, "Voice command: $command")
+            webSocketClient.sendMove(command)
+        }
+        voiceCommandHandler?.initialize()
+        
+        // Update the UI with the new handler
+        setContent {
+            RoboControlTheme {
+                RoboControlApp(
+                    settingsManager = settingsManager,
+                    webSocketClient = webSocketClient,
+                    robotController = robotController,
+                    voiceHandler = voiceCommandHandler
                 )
             }
         }
@@ -81,10 +147,9 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Handle key events from Rokid touchpad/remote at Activity level
-     * This ensures we catch all key events including from the touchpad
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        Log.d(TAG, "onKeyDown: keyCode=$keyCode, event=$event")
+        Log.d(TAG, "onKeyDown: keyCode=$keyCode")
         if (robotController.onKeyDown(keyCode, event)) {
             return true
         }
@@ -92,7 +157,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        Log.d(TAG, "onKeyUp: keyCode=$keyCode, event=$event")
+        Log.d(TAG, "onKeyUp: keyCode=$keyCode")
         if (robotController.onKeyUp(keyCode, event)) {
             return true
         }
@@ -120,12 +185,9 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Dispatch touch events for two-finger swipe detection
-     * Two finger swipe right = Forward
-     * Two finger swipe left = Backward
+     * Dispatch touch events for gesture detection
      */
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        // Let the robot controller handle two-finger gestures
         if (robotController.onTouchEvent(event)) {
             return true
         }
@@ -143,6 +205,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        voiceCommandHandler?.destroy()
         webSocketClient.disconnect()
     }
 }
@@ -151,7 +214,8 @@ class MainActivity : ComponentActivity() {
 fun RoboControlApp(
     settingsManager: SettingsManager,
     webSocketClient: RobotWebSocketClient,
-    robotController: RobotController
+    robotController: RobotController,
+    voiceHandler: VoiceCommandHandler?
 ) {
     val settings by settingsManager.settings.collectAsState(initial = RobotSettings())
     val connectionState by webSocketClient.connectionState.collectAsState()
@@ -166,7 +230,6 @@ fun RoboControlApp(
     // Request focus when the composable is first displayed
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
-        // Also set the view as focusable
         view.isFocusable = true
         view.isFocusableInTouchMode = true
         view.requestFocus()
@@ -221,6 +284,7 @@ fun RoboControlApp(
             connectionState = connectionState,
             currentAction = currentAction,
             robotController = robotController,
+            voiceHandler = voiceHandler,
             onOpenSettings = { showSettings = true }
         )
 
