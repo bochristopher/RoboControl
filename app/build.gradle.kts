@@ -66,9 +66,6 @@ dependencies {
     // Navigation Compose
     implementation("androidx.navigation:navigation-compose:2.7.6")
     
-    // Vosk offline speech recognition (works without Google Services)
-    implementation("com.alphacephei:vosk-android:0.3.47")
-    
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

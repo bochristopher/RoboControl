@@ -15,7 +15,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -27,19 +26,10 @@ fun ControlScreen(
     connectionState: ConnectionState,
     currentAction: RobotController.ControlAction,
     robotController: RobotController,
-    voiceHandler: VoiceCommandHandler?,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var commandsSent by remember { mutableIntStateOf(0) }
-    
-    // Voice state
-    val isListening = voiceHandler?.isListening?.collectAsState()?.value ?: false
-    val recognizedText = voiceHandler?.recognizedText?.collectAsState()?.value
-    val lastCommand = voiceHandler?.lastCommand?.collectAsState()?.value
-    val errorMessage = voiceHandler?.errorMessage?.collectAsState()?.value
-    val isModelLoaded = voiceHandler?.isModelLoaded?.collectAsState()?.value ?: false
-    val isLoading = voiceHandler?.isLoading?.collectAsState()?.value ?: false
 
     // Count commands when action changes
     LaunchedEffect(currentAction) {
@@ -74,18 +64,6 @@ fun ControlScreen(
             modifier = Modifier.align(Alignment.Center)
         )
 
-        // Voice feedback overlay (above center) - disabled until voice model works
-        // VoiceFeedbackOverlay(
-        //     isListening = isListening,
-        //     isLoading = isLoading,
-        //     recognizedText = recognizedText,
-        //     lastCommand = lastCommand,
-        //     errorMessage = errorMessage,
-        //     modifier = Modifier
-        //         .align(Alignment.TopCenter)
-        //         .padding(top = 100.dp)
-        // )
-
         // Debug info (bottom left)
         DebugInfo(
             connectionState = connectionState,
@@ -109,165 +87,6 @@ fun ControlScreen(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 80.dp)
         )
-
-        // Mic button (top right, below settings) - disabled until voice model works
-        // MicButton(
-        //     isListening = isListening,
-        //     isModelLoaded = isModelLoaded,
-        //     isLoading = isLoading,
-        //     onMicClick = {
-        //         if (isListening) {
-        //             voiceHandler?.stopListening()
-        //         } else {
-        //             voiceHandler?.startListening()
-        //         }
-        //     },
-        //     modifier = Modifier
-        //         .align(Alignment.TopEnd)
-        //         .padding(top = 80.dp, end = 16.dp)
-        // )
-    }
-}
-
-@Composable
-fun MicButton(
-    isListening: Boolean,
-    isModelLoaded: Boolean,
-    isLoading: Boolean,
-    onMicClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    // Pulsing animation when listening or loading
-    var pulseAlpha by remember { mutableFloatStateOf(1f) }
-    
-    if (isListening || isLoading) {
-        LaunchedEffect(isListening, isLoading) {
-            while (isActive) {
-                pulseAlpha = 0.5f
-                delay(300)
-                pulseAlpha = 1f
-                delay(300)
-            }
-        }
-    } else {
-        pulseAlpha = 1f
-    }
-
-    val backgroundColor = when {
-        isListening -> Color(0xFFFF4444).copy(alpha = pulseAlpha)
-        isLoading -> Color(0xFFFFAA00).copy(alpha = pulseAlpha * 0.6f)
-        isModelLoaded -> Color(0xFF00D9FF).copy(alpha = 0.4f)
-        else -> Color.Gray.copy(alpha = 0.3f)
-    }
-
-    Box(
-        modifier = modifier
-            .size(64.dp)
-            .clip(CircleShape)
-            .background(backgroundColor)
-            .clickable(enabled = isModelLoaded && !isLoading) { onMicClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = when {
-                isLoading -> "⏳"
-                isListening -> "🎤"
-                isModelLoaded -> "🎙"
-                else -> "🎙"
-            },
-            fontSize = 28.sp,
-            color = if (isModelLoaded || isLoading) Color.Unspecified else Color.Gray
-        )
-    }
-}
-
-@Composable
-fun VoiceFeedbackOverlay(
-    isListening: Boolean,
-    isLoading: Boolean,
-    recognizedText: String?,
-    lastCommand: String?,
-    errorMessage: String?,
-    modifier: Modifier = Modifier
-) {
-    AnimatedVisibility(
-        visible = isListening || isLoading || recognizedText != null || lastCommand != null || errorMessage != null,
-        modifier = modifier,
-        enter = fadeIn() + slideInVertically(),
-        exit = fadeOut() + slideOutVertically()
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color.Black.copy(alpha = 0.85f))
-                .padding(horizontal = 24.dp, vertical = 16.dp)
-        ) {
-            when {
-                isLoading -> {
-                    Text(
-                        text = "⏳ Loading voice model...",
-                        color = Color(0xFFFFAA00),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "First time setup",
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 12.sp
-                    )
-                }
-                isListening -> {
-                    Text(
-                        text = "🎤 Listening...",
-                        color = Color(0xFFFF4444),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    if (recognizedText != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "\"$recognizedText\"",
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-                lastCommand != null -> {
-                    Text(
-                        text = "✓ ${lastCommand.uppercase()}",
-                        color = Color(0xFF00FF88),
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    if (recognizedText != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "\"$recognizedText\"",
-                            color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-                errorMessage != null -> {
-                    Text(
-                        text = "⚠ $errorMessage",
-                        color = Color(0xFFFFAA00),
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-        }
-    }
-    
-    // Auto-hide after showing command/error
-    LaunchedEffect(lastCommand, errorMessage) {
-        if (lastCommand != null || errorMessage != null) {
-            delay(2000)
-        }
     }
 }
 
