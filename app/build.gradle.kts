@@ -18,11 +18,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // Don't compress model files - Vosk needs them as-is
-    androidResources {
-        noCompress += listOf("mdl", "fst", "conf", "int", "mat", "dubm", "ie", "stats")
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = false
