@@ -1,29 +1,40 @@
 package com.example.robocontrol
 
+import android.Manifest
 import android.content.Context
-import android.content.Intent
-import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
+import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.util.Log
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.util.Locale
+import org.json.JSONObject
+import org.vosk.Model
+import org.vosk.Recognizer
+import org.vosk.android.StorageService
+import java.io.IOException
 
 /**
- * Handles voice command recognition using Android's SpeechRecognizer.
- * Parses recognized text into robot movement commands.
+ * Handles voice command recognition using Vosk offline speech recognition.
+ * Works on devices without Google Play Services (like Rokid glasses).
  */
 class VoiceCommandHandler(
     private val context: Context,
-    private val onCommand: (String) -> Unit // Callback to send command (forward, backward, etc.)
+    private val onCommand: (String) -> Unit
 ) {
     companion object {
         private const val TAG = "VoiceCommand"
+        private const val SAMPLE_RATE = 16000
     }
 
-    private var speechRecognizer: SpeechRecognizer? = null
+    private var model: Model? = null
+    private var recognizer: Recognizer? = null
+    private var audioRecord: AudioRecord? = null
+    private var recordingJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private val _isListening = MutableStateFlow(false)
     val isListening: StateFlow<Boolean> = _isListening
@@ -36,27 +47,52 @@ class VoiceCommandHandler(
     
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage
+    
+    private val _isModelLoaded = MutableStateFlow(false)
+    val isModelLoaded: StateFlow<Boolean> = _isModelLoaded
+    
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading
 
     // Command keyword mappings
     private val commandPatterns = mapOf(
-        "forward" to listOf("forward", "go forward", "move forward", "ahead", "go ahead"),
+        "forward" to listOf("forward", "go forward", "move forward", "ahead", "go ahead", "go"),
         "backward" to listOf("back", "backward", "reverse", "go back", "move back"),
         "left" to listOf("left", "turn left", "go left"),
         "right" to listOf("right", "turn right", "go right"),
-        "stop" to listOf("stop", "halt", "freeze", "brake", "hold")
+        "stop" to listOf("stop", "halt", "freeze", "brake", "hold", "wait")
     )
 
     fun initialize(): Boolean {
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            Log.e(TAG, "Speech recognition not available on this device")
-            _errorMessage.value = "Speech recognition not available"
-            return false
-        }
-
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
-        speechRecognizer?.setRecognitionListener(createRecognitionListener())
+        Log.d(TAG, "Initializing Vosk voice handler...")
+        _isLoading.value = true
+        _errorMessage.value = "Loading voice model..."
         
-        Log.d(TAG, "VoiceCommandHandler initialized")
+        scope.launch {
+            try {
+                // Unpack the model from assets
+                StorageService.unpack(context, "model-en-us", "model",
+                    { loadedModel ->
+                        model = loadedModel
+                        recognizer = Recognizer(loadedModel, SAMPLE_RATE.toFloat())
+                        _isModelLoaded.value = true
+                        _isLoading.value = false
+                        _errorMessage.value = null
+                        Log.d(TAG, "Vosk model loaded successfully")
+                    },
+                    { exception ->
+                        Log.e(TAG, "Failed to load Vosk model: ${exception.message}")
+                        _errorMessage.value = "Voice model failed to load"
+                        _isLoading.value = false
+                    }
+                )
+            } catch (e: IOException) {
+                Log.e(TAG, "Failed to initialize Vosk: ${e.message}")
+                _errorMessage.value = "Voice init failed: ${e.message}"
+                _isLoading.value = false
+            }
+        }
+        
         return true
     }
 
@@ -66,53 +102,155 @@ class VoiceCommandHandler(
             return
         }
 
-        if (speechRecognizer == null) {
-            if (!initialize()) {
-                return
+        if (!_isModelLoaded.value) {
+            _errorMessage.value = "Voice model not loaded yet"
+            Log.w(TAG, "Model not loaded")
+            return
+        }
+
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) 
+            != PackageManager.PERMISSION_GRANTED) {
+            _errorMessage.value = "Microphone permission denied"
+            return
+        }
+
+        _recognizedText.value = null
+        _lastCommand.value = null
+        _errorMessage.value = null
+        _isListening.value = true
+
+        recordingJob = scope.launch {
+            try {
+                startRecording()
+            } catch (e: Exception) {
+                Log.e(TAG, "Recording error: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    _errorMessage.value = "Recording error: ${e.message}"
+                    _isListening.value = false
+                }
+            }
+        }
+        
+        // Auto-stop after 5 seconds
+        scope.launch {
+            delay(5000)
+            if (_isListening.value) {
+                stopListening()
+            }
+        }
+    }
+
+    private suspend fun startRecording() {
+        val bufferSize = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            bufferSize * 2
+        )
+
+        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            withContext(Dispatchers.Main) {
+                _errorMessage.value = "Failed to initialize audio"
+                _isListening.value = false
+            }
+            return
+        }
+
+        audioRecord?.startRecording()
+        Log.d(TAG, "Recording started")
+
+        val buffer = ShortArray(bufferSize / 2)
+        recognizer?.reset()
+
+        while (_isListening.value && isActive) {
+            val read = audioRecord?.read(buffer, 0, buffer.size) ?: -1
+            
+            if (read > 0) {
+                // Convert short array to byte array for Vosk
+                val byteBuffer = ByteArray(read * 2)
+                for (i in 0 until read) {
+                    byteBuffer[i * 2] = (buffer[i].toInt() and 0xFF).toByte()
+                    byteBuffer[i * 2 + 1] = (buffer[i].toInt() shr 8 and 0xFF).toByte()
+                }
+
+                val isFinal = recognizer?.acceptWaveForm(byteBuffer, byteBuffer.size) ?: false
+                
+                val result = if (isFinal) {
+                    recognizer?.result
+                } else {
+                    recognizer?.partialResult
+                }
+
+                result?.let { parseVoskResult(it, isFinal) }
             }
         }
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            // Timeout settings
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 500L)
-        }
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
+        
+        // Get final result
+        recognizer?.finalResult?.let { parseVoskResult(it, true) }
+        
+        Log.d(TAG, "Recording stopped")
+    }
 
+    private suspend fun parseVoskResult(jsonResult: String, isFinal: Boolean) {
         try {
-            _recognizedText.value = null
-            _lastCommand.value = null
-            _errorMessage.value = null
-            speechRecognizer?.startListening(intent)
-            _isListening.value = true
-            Log.d(TAG, "Started listening")
+            val json = JSONObject(jsonResult)
+            val text = if (isFinal) {
+                json.optString("text", "")
+            } else {
+                json.optString("partial", "")
+            }
+
+            if (text.isNotBlank()) {
+                withContext(Dispatchers.Main) {
+                    _recognizedText.value = text
+                    Log.d(TAG, "Recognized${if (isFinal) " (final)" else ""}: $text")
+
+                    if (isFinal) {
+                        val command = parseCommand(text)
+                        if (command != null) {
+                            _lastCommand.value = command
+                            onCommand(command)
+                        } else if (text.isNotBlank()) {
+                            _errorMessage.value = "Unknown: \"$text\""
+                        }
+                    }
+                }
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start listening: ${e.message}")
-            _errorMessage.value = "Failed to start: ${e.message}"
-            _isListening.value = false
+            Log.e(TAG, "Failed to parse Vosk result: ${e.message}")
         }
     }
 
     fun stopListening() {
-        speechRecognizer?.stopListening()
         _isListening.value = false
+        recordingJob?.cancel()
+        recordingJob = null
         Log.d(TAG, "Stopped listening")
     }
 
     fun destroy() {
-        speechRecognizer?.destroy()
-        speechRecognizer = null
-        _isListening.value = false
+        stopListening()
+        scope.cancel()
+        recognizer?.close()
+        model?.close()
+        recognizer = null
+        model = null
         Log.d(TAG, "VoiceCommandHandler destroyed")
     }
 
     /**
      * Parse recognized text and return command direction.
-     * Returns null if no command matched.
      */
     private fun parseCommand(text: String): String? {
         val lowerText = text.lowercase().trim()
@@ -130,80 +268,4 @@ class VoiceCommandHandler(
         Log.d(TAG, "No command matched for: '$lowerText'")
         return null
     }
-
-    private fun createRecognitionListener() = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {
-            Log.d(TAG, "Ready for speech")
-            _isListening.value = true
-        }
-
-        override fun onBeginningOfSpeech() {
-            Log.d(TAG, "Speech started")
-        }
-
-        override fun onRmsChanged(rmsdB: Float) {
-            // Audio level changed - could use for visual feedback
-        }
-
-        override fun onBufferReceived(buffer: ByteArray?) {
-            // Audio buffer received
-        }
-
-        override fun onEndOfSpeech() {
-            Log.d(TAG, "Speech ended")
-            _isListening.value = false
-        }
-
-        override fun onError(error: Int) {
-            val errorText = when (error) {
-                SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
-                SpeechRecognizer.ERROR_CLIENT -> "Client error"
-                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Need microphone permission"
-                SpeechRecognizer.ERROR_NETWORK -> "Network error"
-                SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-                SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected"
-                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
-                SpeechRecognizer.ERROR_SERVER -> "Server error"
-                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech heard"
-                else -> "Error code: $error"
-            }
-            Log.e(TAG, "Recognition error: $errorText")
-            _errorMessage.value = errorText
-            _isListening.value = false
-        }
-
-        override fun onResults(results: Bundle?) {
-            val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-            Log.d(TAG, "Results: $matches")
-
-            if (!matches.isNullOrEmpty()) {
-                val recognizedText = matches[0]
-                _recognizedText.value = recognizedText
-
-                // Parse command from recognized text
-                val command = parseCommand(recognizedText)
-                if (command != null) {
-                    _lastCommand.value = command
-                    onCommand(command)
-                } else {
-                    _errorMessage.value = "Unknown: \"$recognizedText\""
-                }
-            }
-
-            _isListening.value = false
-        }
-
-        override fun onPartialResults(partialResults: Bundle?) {
-            val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-            if (!matches.isNullOrEmpty()) {
-                Log.d(TAG, "Partial: ${matches[0]}")
-                _recognizedText.value = matches[0]
-            }
-        }
-
-        override fun onEvent(eventType: Int, params: Bundle?) {
-            Log.d(TAG, "Event: $eventType")
-        }
-    }
 }
-

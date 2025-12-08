@@ -38,6 +38,8 @@ fun ControlScreen(
     val recognizedText = voiceHandler?.recognizedText?.collectAsState()?.value
     val lastCommand = voiceHandler?.lastCommand?.collectAsState()?.value
     val errorMessage = voiceHandler?.errorMessage?.collectAsState()?.value
+    val isModelLoaded = voiceHandler?.isModelLoaded?.collectAsState()?.value ?: false
+    val isLoading = voiceHandler?.isLoading?.collectAsState()?.value ?: false
 
     // Count commands when action changes
     LaunchedEffect(currentAction) {
@@ -75,6 +77,7 @@ fun ControlScreen(
         // Voice feedback overlay (above center)
         VoiceFeedbackOverlay(
             isListening = isListening,
+            isLoading = isLoading,
             recognizedText = recognizedText,
             lastCommand = lastCommand,
             errorMessage = errorMessage,
@@ -110,6 +113,8 @@ fun ControlScreen(
         // Mic button (top right, below settings)
         MicButton(
             isListening = isListening,
+            isModelLoaded = isModelLoaded,
+            isLoading = isLoading,
             onMicClick = {
                 if (isListening) {
                     voiceHandler?.stopListening()
@@ -127,14 +132,16 @@ fun ControlScreen(
 @Composable
 fun MicButton(
     isListening: Boolean,
+    isModelLoaded: Boolean,
+    isLoading: Boolean,
     onMicClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Pulsing animation when listening
+    // Pulsing animation when listening or loading
     var pulseAlpha by remember { mutableFloatStateOf(1f) }
     
-    if (isListening) {
-        LaunchedEffect(Unit) {
+    if (isListening || isLoading) {
+        LaunchedEffect(isListening, isLoading) {
             while (isActive) {
                 pulseAlpha = 0.5f
                 delay(300)
@@ -146,22 +153,30 @@ fun MicButton(
         pulseAlpha = 1f
     }
 
+    val backgroundColor = when {
+        isListening -> Color(0xFFFF4444).copy(alpha = pulseAlpha)
+        isLoading -> Color(0xFFFFAA00).copy(alpha = pulseAlpha * 0.6f)
+        isModelLoaded -> Color(0xFF00D9FF).copy(alpha = 0.4f)
+        else -> Color.Gray.copy(alpha = 0.3f)
+    }
+
     Box(
         modifier = modifier
             .size(64.dp)
             .clip(CircleShape)
-            .background(
-                if (isListening) 
-                    Color(0xFFFF4444).copy(alpha = pulseAlpha) 
-                else 
-                    Color(0xFF00D9FF).copy(alpha = 0.4f)
-            )
-            .clickable { onMicClick() },
+            .background(backgroundColor)
+            .clickable(enabled = isModelLoaded && !isLoading) { onMicClick() },
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = if (isListening) "🎤" else "🎙",
-            fontSize = 28.sp
+            text = when {
+                isLoading -> "⏳"
+                isListening -> "🎤"
+                isModelLoaded -> "🎙"
+                else -> "🎙"
+            },
+            fontSize = 28.sp,
+            color = if (isModelLoaded || isLoading) Color.Unspecified else Color.Gray
         )
     }
 }
@@ -169,13 +184,14 @@ fun MicButton(
 @Composable
 fun VoiceFeedbackOverlay(
     isListening: Boolean,
+    isLoading: Boolean,
     recognizedText: String?,
     lastCommand: String?,
     errorMessage: String?,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
-        visible = isListening || recognizedText != null || lastCommand != null || errorMessage != null,
+        visible = isListening || isLoading || recognizedText != null || lastCommand != null || errorMessage != null,
         modifier = modifier,
         enter = fadeIn() + slideInVertically(),
         exit = fadeOut() + slideOutVertically()
@@ -188,6 +204,20 @@ fun VoiceFeedbackOverlay(
                 .padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
             when {
+                isLoading -> {
+                    Text(
+                        text = "⏳ Loading voice model...",
+                        color = Color(0xFFFFAA00),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "First time setup",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp
+                    )
+                }
                 isListening -> {
                     Text(
                         text = "🎤 Listening...",
