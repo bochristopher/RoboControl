@@ -76,8 +76,8 @@ class MainActivity : ComponentActivity() {
             webSocketClient.sendMove(direction)
         }
 
-        // Request microphone permission for voice control
-        checkAndRequestMicrophonePermission()
+        // Voice control disabled - Vosk model doesn't load on Rokid glasses
+        // checkAndRequestMicrophonePermission()
 
         // Full immersive mode
         enableEdgeToEdge()

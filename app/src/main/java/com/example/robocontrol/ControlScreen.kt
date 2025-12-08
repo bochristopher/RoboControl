@@ -74,17 +74,17 @@ fun ControlScreen(
             modifier = Modifier.align(Alignment.Center)
         )
 
-        // Voice feedback overlay (above center)
-        VoiceFeedbackOverlay(
-            isListening = isListening,
-            isLoading = isLoading,
-            recognizedText = recognizedText,
-            lastCommand = lastCommand,
-            errorMessage = errorMessage,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 100.dp)
-        )
+        // Voice feedback overlay (above center) - disabled until voice model works
+        // VoiceFeedbackOverlay(
+        //     isListening = isListening,
+        //     isLoading = isLoading,
+        //     recognizedText = recognizedText,
+        //     lastCommand = lastCommand,
+        //     errorMessage = errorMessage,
+        //     modifier = Modifier
+        //         .align(Alignment.TopCenter)
+        //         .padding(top = 100.dp)
+        // )
 
         // Debug info (bottom left)
         DebugInfo(
@@ -110,22 +110,22 @@ fun ControlScreen(
                 .padding(bottom = 80.dp)
         )
 
-        // Mic button (top right, below settings)
-        MicButton(
-            isListening = isListening,
-            isModelLoaded = isModelLoaded,
-            isLoading = isLoading,
-            onMicClick = {
-                if (isListening) {
-                    voiceHandler?.stopListening()
-                } else {
-                    voiceHandler?.startListening()
-                }
-            },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 80.dp, end = 16.dp)
-        )
+        // Mic button (top right, below settings) - disabled until voice model works
+        // MicButton(
+        //     isListening = isListening,
+        //     isModelLoaded = isModelLoaded,
+        //     isLoading = isLoading,
+        //     onMicClick = {
+        //         if (isListening) {
+        //             voiceHandler?.stopListening()
+        //         } else {
+        //             voiceHandler?.startListening()
+        //         }
+        //     },
+        //     modifier = Modifier
+        //         .align(Alignment.TopEnd)
+        //         .padding(top = 80.dp, end = 16.dp)
+        // )
     }
 }
 
@@ -433,7 +433,6 @@ fun ControlHints(modifier: Modifier = Modifier) {
         Text("Swipe → = Right", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
         Text("Hold = Forward", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
         Text("Double Tap = Back", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
-        Text("🎙 = Voice", color = Color.White.copy(alpha = 0.6f), fontSize = 9.sp)
     }
 }
 
